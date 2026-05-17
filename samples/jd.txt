@@ -1,0 +1,17 @@
+Backend Engineer — Platform Team
+
+We're hiring a mid-level backend engineer to build APIs and data pipelines for our B2B SaaS product.
+
+Requirements:
+- 3+ years professional experience with Python
+- Strong PostgreSQL skills (schema design, query tuning)
+- Experience building REST or GraphQL APIs
+- Familiarity with Docker and CI/CD
+- Comfort working in a small, fast-moving team
+
+Nice to have:
+- Kafka or other message queues
+- AWS (ECS, RDS, S3)
+- Observability (Prometheus, Grafana, OpenTelemetry)
+
+You will own features end-to-end: design, implementation, tests, and production support.
