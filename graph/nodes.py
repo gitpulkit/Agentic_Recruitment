@@ -5,13 +5,21 @@ import httpx
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
-from graph.schemas import MatchResult, ParsedJD, ProfileBrief
+from graph.schemas import MatchResult, ParsedJD, ProfileBrief, SearchPlan
 
 GITHUB_API = "https://api.github.com"
 
 
 def _llm() -> ChatOpenAI:
     return ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=0)
+
+
+def _github_headers() -> dict:
+    headers = {"Accept": "application/vnd.github+json"}
+    token = os.getenv("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def parse_jd_node(state: dict) -> dict:
@@ -30,20 +38,76 @@ def parse_jd_node(state: dict) -> dict:
     return {"parsed_jd": parsed.model_dump()}
 
 
-def _fetch_github_user(username: str) -> dict:
-    headers = {"Accept": "application/vnd.github+json"}
-    token = os.getenv("GITHUB_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+def plan_search_node(state: dict) -> dict:
+    llm = _llm().with_structured_output(SearchPlan)
+    plan: SearchPlan = llm.invoke(
+        [
+            SystemMessage(
+                content=(
+                    "You turn structured hiring requirements into GitHub repository "
+                    "search queries to find candidates who maintain relevant projects. "
+                    "Produce 2-4 focused queries using qualifiers like language:, "
+                    "topic:, and stars:. Prefer must-have skills. Return query strings "
+                    "only (no URLs)."
+                )
+            ),
+            HumanMessage(content=f"Parsed JD:\n{state['parsed_jd']}"),
+        ]
+    )
+    return {"search_plan": plan.model_dump()}
 
+
+def _search_repositories(query: str, per_page: int = 10) -> list[dict]:
     with httpx.Client(timeout=30.0) as client:
-        user_resp = client.get(f"{GITHUB_API}/users/{username}", headers=headers)
+        resp = client.get(
+            f"{GITHUB_API}/search/repositories",
+            headers=_github_headers(),
+            params={"q": query, "sort": "stars", "order": "desc", "per_page": per_page},
+        )
+        resp.raise_for_status()
+        return resp.json().get("items", [])
+
+
+def search_candidates_node(state: dict) -> dict:
+    top_k = state.get("top_k", 5)
+    plan = state.get("search_plan") or {}
+    queries = plan.get("queries", [])
+
+    usernames: list[str] = []
+    seen: set[str] = set()
+
+    for query in queries:
+        try:
+            repos = _search_repositories(query, per_page=10)
+        except httpx.HTTPError:
+            continue
+
+        for repo in repos:
+            owner = repo.get("owner") or {}
+            if owner.get("type") != "User":
+                continue
+            login = owner.get("login")
+            if login and login not in seen:
+                seen.add(login)
+                usernames.append(login)
+
+        if len(usernames) >= top_k:
+            break
+
+    return {"candidate_usernames": usernames[:top_k]}
+
+
+def _fetch_github_user(username: str) -> dict:
+    with httpx.Client(timeout=30.0) as client:
+        user_resp = client.get(
+            f"{GITHUB_API}/users/{username}", headers=_github_headers()
+        )
         user_resp.raise_for_status()
         user = user_resp.json()
 
         repos_resp = client.get(
             f"{GITHUB_API}/users/{username}/repos",
-            headers=headers,
+            headers=_github_headers(),
             params={"sort": "updated", "per_page": 10},
         )
         repos_resp.raise_for_status()
@@ -61,18 +125,12 @@ def _infer_languages(repos: list[dict]) -> list[str]:
     return [lang for lang, _ in counts.most_common(5)]
 
 
-def research_github_node(state: dict) -> dict:
-    username = state["github_username"].strip().lstrip("@")
-    if "github.com/" in username:
-        username = username.rstrip("/").split("github.com/")[-1].split("/")[0]
-
+def _build_profile_brief(username: str) -> dict:
     data = _fetch_github_user(username)
     user = data["user"]
     repos = data["repos"]
 
-    top_repos = [r["name"] for r in repos[:5]]
     languages = _infer_languages(repos)
-
     repo_lines = "\n".join(
         f"- {r['name']}: {r.get('description') or 'No description'} "
         f"(stars: {r.get('stargazers_count', 0)}, language: {r.get('language')})"
@@ -104,15 +162,10 @@ def research_github_node(state: dict) -> dict:
         ]
     )
 
-    return {
-        "profile_brief": {
-            **brief.model_dump(),
-            "profile_url": user.get("html_url"),
-        }
-    }
+    return {**brief.model_dump(), "profile_url": user.get("html_url")}
 
 
-def score_match_node(state: dict) -> dict:
+def _score(parsed_jd: dict, profile_brief: dict) -> dict:
     llm = _llm().with_structured_output(MatchResult)
     result: MatchResult = llm.invoke(
         [
@@ -125,10 +178,40 @@ def score_match_node(state: dict) -> dict:
             ),
             HumanMessage(
                 content=(
-                    f"Parsed JD:\n{state['parsed_jd']}\n\n"
-                    f"Profile brief:\n{state['profile_brief']}"
+                    f"Parsed JD:\n{parsed_jd}\n\nProfile brief:\n{profile_brief}"
                 )
             ),
         ]
     )
-    return {"match_result": result.model_dump()}
+    return result.model_dump()
+
+
+def research_and_score_node(state: dict) -> dict:
+    username = state["username"]
+    try:
+        brief = _build_profile_brief(username)
+        match = _score(state["parsed_jd"], brief)
+        result = {
+            "username": username,
+            "profile_brief": brief,
+            "match_result": match,
+        }
+    except (httpx.HTTPError, KeyError) as exc:
+        result = {
+            "username": username,
+            "profile_brief": None,
+            "match_result": None,
+            "error": str(exc),
+        }
+    return {"candidate_results": [result]}
+
+
+def rank_node(state: dict) -> dict:
+    results = state.get("candidate_results", [])
+
+    def score_of(item: dict) -> int:
+        match = item.get("match_result") or {}
+        return match.get("score", -1)
+
+    ranked = sorted(results, key=score_of, reverse=True)
+    return {"ranked_shortlist": ranked}

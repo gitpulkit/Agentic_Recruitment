@@ -6,19 +6,23 @@ This repo starts with a **hello-world pipeline** — one job description and one
 
 **Continuing in a new chat?** Read [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) for product vision, architecture decisions, milestone status, and what to build next.
 
-## What this hello world does
+## What this does
 
-Given a JD file and a GitHub username, the graph runs three steps:
+Given just a JD file, the graph sources candidates from GitHub and ranks them:
 
 1. **parse_jd** — Extract structured requirements (skills, seniority, role title) from the job description.
-2. **research_github** — Fetch profile and repo data from the GitHub API, then summarize into a recruiter brief.
-3. **score_match** — Score the candidate 0–100 with strengths, gaps, and a short rationale.
+2. **plan_search** — Turn the requirements into GitHub repository search queries.
+3. **search_candidates** — Run the queries and collect repo owners as candidate usernames.
+4. **research_and_score** — For each candidate (in parallel), fetch GitHub data, write a recruiter brief, and score the fit 0–100.
+5. **rank** — Sort candidates by score into a shortlist.
 
 ```text
-START → parse_jd → research_github → score_match → END
+START → parse_jd → plan_search → search_candidates → (Send: research_and_score per candidate) → rank → END
 ```
 
-No sourcing, LinkedIn, email drafts, or UI yet — just the core “is this person a fit?” loop.
+The fan-out uses LangGraph's `Send` to run the research/score step for every candidate in parallel, and a list reducer (`operator.add`) to collect their results.
+
+No LinkedIn, email drafts, or UI yet — this is the sourcing + ranking funnel.
 
 ## Prerequisites
 
@@ -60,16 +64,12 @@ OPENAI_API_KEY=sk-your-key-here
 ```bash
 source .venv/bin/activate
 
-python main.py --jd samples/jd.txt --github octocat
+python main.py --jd samples/jd.txt --top-k 5
 ```
 
-You can pass a username or a full profile URL:
+`--top-k` caps how many candidates are researched and ranked (default 5). Keep it small to stay within GitHub search rate limits; a `GITHUB_TOKEN` in `.env` is strongly recommended.
 
-```bash
-python main.py --jd samples/jd.txt --github https://github.com/torvalds
-```
-
-Output is JSON printed to the terminal: `parsed_jd`, `profile_brief`, and `match_result`.
+Output is a ranked shortlist table plus the full result JSON (`parsed_jd`, `search_plan`, `candidate_usernames`, `ranked_shortlist`).
 
 ## Project layout
 
@@ -77,10 +77,10 @@ Output is JSON printed to the terminal: `parsed_jd`, `profile_brief`, and `match
 agentic_recruitment/
 ├── main.py              # CLI entrypoint
 ├── graph/
-│   ├── state.py         # Shared graph state (TypedDict)
+│   ├── state.py         # Shared graph state (TypedDict + reducer)
 │   ├── schemas.py       # Pydantic models for structured LLM output
-│   ├── nodes.py         # parse_jd, research_github, score_match
-│   └── workflow.py      # LangGraph definition
+│   ├── nodes.py         # parse_jd, plan_search, search_candidates, research_and_score, rank
+│   └── workflow.py      # LangGraph definition (Send fan-out)
 ├── samples/
 │   └── jd.txt           # Sample backend engineer JD
 ├── requirements.txt
@@ -91,9 +91,9 @@ agentic_recruitment/
 
 | Phase | Scope |
 |-------|--------|
-| **Now (hello world)** | JD + one GitHub user → structured parse, profile brief, match score |
-| **Next** | JD + multiple usernames → ranked table |
-| **Later** | GitHub search sourcing, LinkedIn, outreach drafts, human approval UI |
+| **Done** | JD → GitHub repo-search sourcing → parallel research/score → ranked shortlist |
+| **Next** | Outreach draft + QA nodes; human approval checkpoints |
+| **Later** | LinkedIn, persistence, API + UI |
 
 The full vision is an autonomous recruiter: upload a JD, AI sources candidates, summarizes GitHub/LinkedIn profiles, and drafts personalized reach-out emails — with human gates before anything is sent.
 
@@ -102,8 +102,9 @@ The full vision is an autonomous recruiter: upload a JD, AI sources candidates, 
 | Issue | Fix |
 |-------|-----|
 | `OPENAI_API_KEY` not set | Create `.env` from `.env.example` and add your key |
-| GitHub `403` / rate limit | Add `GITHUB_TOKEN` to `.env` |
-| Slow first run | Three LLM calls + GitHub API; typically under a minute |
+| GitHub `403` / rate limit | Add `GITHUB_TOKEN` to `.env`; lower `--top-k` |
+| Empty shortlist | Search queries matched no user-owned repos; try a different JD or add `GITHUB_TOKEN` |
+| Slow run | Several LLM + GitHub calls per candidate; keep `--top-k` small |
 
 ## License
 

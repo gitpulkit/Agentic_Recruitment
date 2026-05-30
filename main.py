@@ -8,17 +8,40 @@ from dotenv import load_dotenv
 from graph.workflow import build_graph
 
 
+def _print_table(ranked: list) -> None:
+    if not ranked:
+        print("\nNo candidates found. Try a different JD or add a GITHUB_TOKEN.\n")
+        return
+
+    print("\nRanked shortlist")
+    print("-" * 72)
+    print(f"{'#':<3} {'score':<6} {'username':<22} profile")
+    print("-" * 72)
+    for i, item in enumerate(ranked, 1):
+        match = item.get("match_result") or {}
+        brief = item.get("profile_brief") or {}
+        score = match.get("score", "-")
+        username = item.get("username", "?")
+        url = brief.get("profile_url", "")
+        print(f"{i:<3} {str(score):<6} {username:<22} {url}")
+        rationale = match.get("rationale")
+        if rationale:
+            print(f"      -> {rationale}")
+    print("-" * 72)
+
+
 def main() -> None:
     load_dotenv()
 
     parser = argparse.ArgumentParser(
-        description="Hello-world recruiter: JD + one GitHub profile → match score"
+        description="Source and rank GitHub candidates from a job description"
     )
     parser.add_argument("--jd", required=True, help="Path to job description text file")
     parser.add_argument(
-        "--github",
-        required=True,
-        help="GitHub username or profile URL (e.g. octocat)",
+        "--top-k",
+        type=int,
+        default=5,
+        help="Max number of candidates to research and rank (default: 5)",
     )
     args = parser.parse_args()
 
@@ -31,13 +54,18 @@ def main() -> None:
     result = graph.invoke(
         {
             "jd_text": jd_path.read_text(),
-            "github_username": args.github,
+            "top_k": args.top_k,
             "parsed_jd": None,
-            "profile_brief": None,
-            "match_result": None,
+            "search_plan": None,
+            "candidate_usernames": [],
+            "candidate_results": [],
+            "ranked_shortlist": None,
+            "username": None,
         }
     )
 
+    _print_table(result.get("ranked_shortlist") or [])
+    print("\nFull result JSON:")
     print(json.dumps(result, indent=2))
 
 

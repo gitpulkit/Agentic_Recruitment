@@ -1,9 +1,15 @@
-from typing import Dict, Optional, TypedDict
+import operator
+from typing import Annotated, Dict, List, Optional, TypedDict
 
 
 class CampaignState(TypedDict):
     jd_text: str
-    github_username: str
+    top_k: int
     parsed_jd: Optional[Dict]
-    profile_brief: Optional[Dict]
-    match_result: Optional[Dict]
+    search_plan: Optional[Dict]
+    candidate_usernames: List[str]
+    # Parallel workers each append their result; operator.add merges the lists.
+    candidate_results: Annotated[List[Dict], operator.add]
+    ranked_shortlist: Optional[List[Dict]]
+    # Set per-worker via the Send payload, not by the main flow.
+    username: Optional[str]

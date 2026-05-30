@@ -28,3 +28,14 @@ class MatchResult(BaseModel):
     strengths: list[str]
     gaps: list[str]
     rationale: str = Field(description="2-3 sentence explanation")
+
+
+class SearchPlan(BaseModel):
+    queries: list[str] = Field(
+        description=(
+            "GitHub repository search queries derived from the JD, e.g. "
+            "'language:python topic:fastapi stars:>50'. Use qualifiers like "
+            "language:, topic:, and stars: to find relevant projects."
+        )
+    )
+    rationale: str = Field(description="Why these queries match the JD")
