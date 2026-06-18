@@ -39,3 +39,29 @@ class SearchPlan(BaseModel):
         )
     )
     rationale: str = Field(description="Why these queries match the JD")
+
+
+class OutreachDraft(BaseModel):
+    username: str
+    subject: str = Field(description="Email subject line")
+    body: str = Field(description="Full email body, ready for human review")
+    personalization_hooks: list[str] = Field(
+        description="Specific profile facts cited in the email (must match profile brief)"
+    )
+
+
+class QACheckResult(BaseModel):
+    username: str
+    passed: bool = Field(description="True if draft is safe to send after human review")
+    issues: list[str] = Field(
+        default_factory=list,
+        description="Unsupported claims, tone problems, or missing context",
+    )
+    severity: str = Field(description="ok, minor, or major")
+
+
+class QAReport(BaseModel):
+    results: list[QACheckResult]
+    overall_passed: bool = Field(
+        description="True only if every draft passed with no major issues"
+    )

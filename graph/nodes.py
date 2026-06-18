@@ -5,7 +5,7 @@ import httpx
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
-from graph.schemas import MatchResult, ParsedJD, ProfileBrief, SearchPlan
+from graph.schemas import MatchResult, OutreachDraft, ParsedJD, ProfileBrief, QAReport, SearchPlan
 
 GITHUB_API = "https://api.github.com"
 
@@ -215,3 +215,85 @@ def rank_node(state: dict) -> dict:
 
     ranked = sorted(results, key=score_of, reverse=True)
     return {"ranked_shortlist": ranked}
+
+
+def outreach_writer_node(state: dict) -> dict:
+    candidate = state["candidate"]
+    username = candidate["username"]
+    profile_brief = candidate.get("profile_brief") or {}
+    match_result = candidate.get("match_result") or {}
+
+    llm = _llm().with_structured_output(OutreachDraft)
+    draft: OutreachDraft = llm.invoke(
+        [
+            SystemMessage(
+                content=(
+                    "You draft personalized recruiter outreach emails for GitHub candidates. "
+                    "Cite specific highlights from the profile brief. "
+                    "Do not invent employers, projects, skills, or achievements. "
+                    "Keep tone warm and professional, not salesy. "
+                    "This is a draft for human review only — never imply the email was sent."
+                )
+            ),
+            HumanMessage(
+                content=(
+                    f"Job description excerpt:\n{state['jd_text'][:1200]}\n\n"
+                    f"Parsed JD:\n{state['parsed_jd']}\n\n"
+                    f"Candidate username: {username}\n"
+                    f"Profile brief:\n{profile_brief}\n\n"
+                    f"Match strengths:\n{match_result.get('strengths', [])}\n"
+                    f"Match rationale:\n{match_result.get('rationale', '')}"
+                )
+            ),
+        ]
+    )
+
+    return {
+        "outreach_drafts": [
+            {
+                **draft.model_dump(),
+                "username": username,
+                "profile_brief": profile_brief,
+            }
+        ]
+    }
+
+
+def qa_node(state: dict) -> dict:
+    drafts = state.get("outreach_drafts") or []
+    if not drafts:
+        return {
+            "qa_report": {
+                "results": [],
+                "overall_passed": True,
+            }
+        }
+
+    draft_blocks = []
+    for draft in drafts:
+        draft_blocks.append(
+            f"--- {draft.get('username', '?')} ---\n"
+            f"Subject: {draft.get('subject', '')}\n"
+            f"Body:\n{draft.get('body', '')}\n"
+            f"Personalization hooks: {draft.get('personalization_hooks', [])}\n"
+            f"Profile brief (source of truth):\n{draft.get('profile_brief', {})}"
+        )
+
+    llm = _llm().with_structured_output(QAReport)
+    report: QAReport = llm.invoke(
+        [
+            SystemMessage(
+                content=(
+                    "You QA recruiter outreach email drafts before a human sends them. "
+                    "Flag unsupported claims that are not backed by the profile brief. "
+                    "Flag spammy, overly familiar, or misleading tone. "
+                    "Mark severity 'major' for fabricated facts; 'minor' for tone tweaks. "
+                    "passed=True only when the draft is factually grounded and send-ready "
+                    "after human review."
+                )
+            ),
+            HumanMessage(content="\n\n".join(draft_blocks)),
+        ]
+    )
+
+    return {"qa_report": report.model_dump()}

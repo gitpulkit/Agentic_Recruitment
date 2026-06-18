@@ -8,21 +8,23 @@ This repo starts with a **hello-world pipeline** — one job description and one
 
 ## What this does
 
-Given just a JD file, the graph sources candidates from GitHub and ranks them:
+Given just a JD file, the graph sources candidates from GitHub, ranks them, and drafts outreach emails:
 
 1. **parse_jd** — Extract structured requirements (skills, seniority, role title) from the job description.
 2. **plan_search** — Turn the requirements into GitHub repository search queries.
 3. **search_candidates** — Run the queries and collect repo owners as candidate usernames.
 4. **research_and_score** — For each candidate (in parallel), fetch GitHub data, write a recruiter brief, and score the fit 0–100.
 5. **rank** — Sort candidates by score into a shortlist.
+6. **outreach_writer** — For the top N shortlisted candidates (in parallel), draft a personalized recruiter email citing profile highlights.
+7. **qa** — Check each draft for unsupported claims and tone issues before human review.
 
 ```text
-START → parse_jd → plan_search → search_candidates → (Send: research_and_score per candidate) → rank → END
+START → parse_jd → plan_search → search_candidates
+      → (Send: research_and_score per candidate) → rank
+      → (Send: outreach_writer per shortlisted candidate) → qa → END
 ```
 
-The fan-out uses LangGraph's `Send` to run the research/score step for every candidate in parallel, and a list reducer (`operator.add`) to collect their results.
-
-No LinkedIn, email drafts, or UI yet — this is the sourcing + ranking funnel.
+The fan-out uses LangGraph's `Send` for parallel workers and list reducers (`operator.add`) to collect results. Emails are **draft-only** — nothing is sent automatically.
 
 ## Prerequisites
 
@@ -64,12 +66,12 @@ OPENAI_API_KEY=sk-your-key-here
 ```bash
 source .venv/bin/activate
 
-python main.py --jd samples/jd.txt --top-k 5
+python main.py --jd samples/jd.txt --top-k 5 --outreach-n 3
 ```
 
-`--top-k` caps how many candidates are researched and ranked (default 5). Keep it small to stay within GitHub search rate limits; a `GITHUB_TOKEN` in `.env` is strongly recommended.
+`--top-k` caps how many candidates are researched and ranked (default 5). `--outreach-n` caps how many get outreach drafts (default 3). Keep both small to stay within GitHub search rate limits; a `GITHUB_TOKEN` in `.env` is strongly recommended.
 
-Output is a ranked shortlist table plus the full result JSON (`parsed_jd`, `search_plan`, `candidate_usernames`, `ranked_shortlist`).
+Output is a ranked shortlist table, outreach drafts with QA status, plus the full result JSON.
 
 ## Project layout
 
@@ -79,7 +81,7 @@ agentic_recruitment/
 ├── graph/
 │   ├── state.py         # Shared graph state (TypedDict + reducer)
 │   ├── schemas.py       # Pydantic models for structured LLM output
-│   ├── nodes.py         # parse_jd, plan_search, search_candidates, research_and_score, rank
+│   ├── nodes.py         # parse_jd … rank, outreach_writer, qa
 │   └── workflow.py      # LangGraph definition (Send fan-out)
 ├── samples/
 │   └── jd.txt           # Sample backend engineer JD
@@ -91,8 +93,8 @@ agentic_recruitment/
 
 | Phase | Scope |
 |-------|--------|
-| **Done** | JD → GitHub repo-search sourcing → parallel research/score → ranked shortlist |
-| **Next** | Outreach draft + QA nodes; human approval checkpoints |
+| **Done** | JD → GitHub sourcing → rank → outreach drafts + QA (draft-only) |
+| **Next** | Human approval checkpoints (LangGraph interrupt) |
 | **Later** | LinkedIn, persistence, API + UI |
 
 The full vision is an autonomous recruiter: upload a JD, AI sources candidates, summarizes GitHub/LinkedIn profiles, and drafts personalized reach-out emails — with human gates before anything is sent.
