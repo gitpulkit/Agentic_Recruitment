@@ -1,7 +1,7 @@
 # Project context (session handoff)
 
-**Last updated:** 2026-05-29  
-**Status:** Milestone 3 complete — JD-driven GitHub sourcing with parallel research/score and ranked shortlist.
+**Last updated:** 2026-06-18  
+**Status:** Milestone 4 complete — outreach draft + QA nodes on ranked shortlist (draft-only, no send).
 
 Use this file when starting a **new Cursor chat** so the agent can pick up without re-explaining the product. Say: *“Read `PROJECT_CONTEXT.md` and continue from the next milestone.”*
 
@@ -41,33 +41,31 @@ JD upload → JD Analyst → [human: search plan] → Sourcer → Profile Resear
 
 ---
 
-## What’s built now (Milestone 3)
+## What’s built now (Milestone 4)
 
-**Scope:** One JD file → AI sources GitHub candidates, researches and scores them in parallel, returns a ranked shortlist. (M3 absorbed M2's multi-candidate ranking.)
+**Scope:** One JD file → AI sources GitHub candidates, researches and scores them in parallel, returns a ranked shortlist, drafts personalized outreach emails for the top N, and QA-checks each draft. Draft-only — never auto-sends.
 
 ```text
-START → parse_jd → plan_search → search_candidates → (Send: research_and_score per candidate) → rank → END
+START → parse_jd → plan_search → search_candidates
+      → (Send: research_and_score per candidate) → rank
+      → (Send: outreach_writer per shortlisted candidate) → qa → END
 ```
 
 | File | Role |
 |------|------|
-| `main.py` | CLI: `--jd` and `--top-k`; prints ranked table + JSON |
-| `graph/workflow.py` | LangGraph `StateGraph` with `Send` fan-out (`fan_out` returns one `Send` per candidate) |
-| `graph/state.py` | `CampaignState` TypedDict; `candidate_results` uses `Annotated[List, operator.add]` reducer |
-| `graph/schemas.py` | `ParsedJD`, `ProfileBrief`, `MatchResult`, `SearchPlan` (Pydantic) |
-| `graph/nodes.py` | `parse_jd`, `plan_search`, `search_candidates` (repo-owner sourcing), `research_and_score` (worker), `rank`; helpers `_build_profile_brief`, `_score`, `_search_repositories` |
+| `main.py` | CLI: `--jd`, `--top-k`, `--outreach-n`; prints ranked table, outreach drafts, QA, JSON |
+| `graph/workflow.py` | LangGraph with two `Send` fan-outs (research/score + outreach) |
+| `graph/state.py` | `CampaignState`; reducers on `candidate_results` and `outreach_drafts` |
+| `graph/schemas.py` | `ParsedJD`, `ProfileBrief`, `MatchResult`, `SearchPlan`, `OutreachDraft`, `QAReport` |
+| `graph/nodes.py` | All pipeline nodes including `outreach_writer` and `qa` |
 | `samples/jd.txt` | Sample backend engineer JD |
-
-**Key LangGraph concepts used:** `Send` for dynamic parallel fan-out (map), list reducer (`operator.add`) to collect worker results (reduce), then a single `rank` node.
 
 **Run:**
 
 ```bash
 source .venv/bin/activate
-python main.py --jd samples/jd.txt --top-k 5
+python main.py --jd samples/jd.txt --top-k 5 --outreach-n 3
 ```
-
-See `README.md` for setup (venv, `.env`, optional `GITHUB_TOKEN`).
 
 ---
 
@@ -103,15 +101,14 @@ OPENAI_MODEL=gpt-4o-mini      # optional
 | **M1** | JD + 1 GitHub user → parse, brief, score (LangGraph) | **Done** |
 | **M2** | JD + N usernames → ranked table | **Done** (absorbed into M3) |
 | **M3** | GitHub repo-search sourcing: JD → queries → top K owners → parallel research/score → rank | **Done** |
-| **M4** | Outreach draft node + QA node | Next |
-| **M5** | Human approval checkpoints (LangGraph `interrupt`) | |
+| **M4** | Outreach draft node + QA node (draft-only, no send) | **Done** |
+| **M5** | Human approval checkpoints (LangGraph `interrupt`) | Next |
 | **M6** | API + UI + persistence (Postgres) | |
 
-**Suggested M4 implementation:**
+**Suggested M5 implementation:**
 
-- Add an `outreach_writer` node that drafts a personalized email per shortlisted candidate (cite `profile_brief` highlights; no fabricated claims).
-- Add a `qa` node that checks drafts for unsupported claims / tone before output.
-- Draft-only — never auto-send. Consider fan-out per shortlisted candidate again, or just the top N.
+- Add LangGraph `interrupt` after `plan_search` (approve search plan), after `rank` (approve shortlist), and after `qa` (approve emails).
+- Resume graph with human-edited state when checkpoints pass.
 
 ---
 
@@ -146,5 +143,5 @@ agentic_recruitment/
 ## For the next agent session
 
 1. Read this file + skim `graph/workflow.py` and `graph/nodes.py`.  
-2. Confirm with user whether to start **M2 (multi-candidate rank)** or **M3 (GitHub search sourcing)**.  
-3. Do not rebuild M1 unless user asks — it’s working.
+2. Continue from **M5 (human approval checkpoints)** unless the user asks otherwise.  
+3. Do not rebuild M1–M4 unless user asks — they’re working.
