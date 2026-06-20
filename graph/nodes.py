@@ -162,7 +162,7 @@ def _build_profile_brief(username: str) -> dict:
         ]
     )
 
-    return {**brief.model_dump(), "profile_url": user.get("html_url")}
+    return {**brief.model_dump(), "profile_url": user.get("html_url"), "email": user.get("email")}
 
 
 def _score(parsed_jd: dict, profile_brief: dict) -> dict:
