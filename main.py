@@ -5,7 +5,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from graph.workflow import build_graph
+from graph.runner import run_campaign
 
 
 def _print_table(ranked: list) -> None:
@@ -89,22 +89,10 @@ def main() -> None:
         print(f"JD file not found: {jd_path}", file=sys.stderr)
         sys.exit(1)
 
-    graph = build_graph()
-    result = graph.invoke(
-        {
-            "jd_text": jd_path.read_text(),
-            "top_k": args.top_k,
-            "outreach_n": args.outreach_n,
-            "parsed_jd": None,
-            "search_plan": None,
-            "candidate_usernames": [],
-            "candidate_results": [],
-            "ranked_shortlist": None,
-            "outreach_drafts": [],
-            "qa_report": None,
-            "username": None,
-            "candidate": None,
-        }
+    result = run_campaign(
+        jd_path.read_text(),
+        top_k=args.top_k,
+        outreach_n=args.outreach_n,
     )
 
     _print_table(result.get("ranked_shortlist") or [])
